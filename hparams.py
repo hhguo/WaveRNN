@@ -34,9 +34,9 @@ hparams=tf.contrib.training.HParams(
   lr=1e-4,
   checkpoint_interval=25000,
   gen_at_checkpoint=5,          # number of samples to generate at each checkpoint
-  nepochs=2000,                 # Total number of training steps
-  pad=2,                        # this will pad the input so that the resnet conv can 'see' wider than input length
+  nepochs=10000,                 # Total number of training steps
   seq_len=1000,                 # must be a multiple of hop_length
+  pad=2,
 
   # Optimizer
   adam_beta1=0.9,
@@ -45,9 +45,9 @@ hparams=tf.contrib.training.HParams(
   clip_thresh=1.0,
   
   # Generate
-  batched=True,                 # very fast (realtime+) single utterance batched generation
-  target=11000,                 # target number of samples to be generated in each batch entry
-  overlap=550,                  # number of samples for crossfading between batches
+  batched=False,                 # very fast (realtime+) single utterance batched generation
+  target=16000,                 # target number of samples to be generated in each batch entry
+  overlap=8000,                  # number of samples for crossfading between batches
 )
 
 def hparams_debug_string():

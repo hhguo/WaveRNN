@@ -1,79 +1,77 @@
-from utils.dataset import get_datasets
-from utils.dsp import *
-from models.fatchord_wavernn import Model
-from utils.paths import Paths
-from utils.display import simple_table
-import torch
 import argparse
+import os
+import torch
+
+from models.fatchord_wavernn import Model
+from utils.audio import *
+from utils.display import simple_table
+from hparams import hparams as hp 
 
 
-def gen_testset(model, test_set, samples, batched, target, overlap, save_path) :
-
-    k = model.get_step() // 1000
-
-    for i, (m, x) in enumerate(test_set, 1):
-
-        if i > samples : break
-
-        print('\n| Generating: %i/%i' % (i, samples))
-
-        x = x[0].numpy()
-
-        if hp.mu_law :
-            x = decode_mu_law(x, 2**hp.bits, from_labels=True)
-        else :
-            x = label_2_float(x, hp.bits)
-
-        save_wav(x, f'{save_path}{k}k_steps_{i}_target.wav')
-
-        batch_str = f'gen_batched_target{target}_overlap{overlap}' if batched else 'gen_NOT_BATCHED'
-        save_str = f'{save_path}{k}k_steps_{i}_{batch_str}.wav'
-
-        _ = model.generate(m, save_str, batched, target, overlap, hp.mu_law)
+use_cuda = torch.cuda.is_available()
+batch_size = 8
 
 
-def gen_from_file(model, load_path, save_path, batched, target, overlap) :
+def _pad_2d(x, max_len, constant_values=0):
+  x = np.pad(x, [(0, max_len - len(x)), (0, 0)],
+             mode="constant", constant_values=constant_values)
+  return x
 
-    k = model.get_step() // 1000
-    file_name = load_path.split('/')[-1]
 
-    wav = load_wav(load_path)
-    save_wav(wav, f'{save_path}__{file_name}__{k}k_steps_target.wav')
-
-    mel = melspectrogram(wav)
-    mel = torch.tensor(mel).unsqueeze(0)
-
-    batch_str = f'gen_batched_target{target}_overlap{overlap}' if batched else 'gen_NOT_BATCHED'
-    save_str = f'{save_path}__{file_name}__{k}k_steps_{batch_str}.wav'
-
-    _ = model.generate(mel, save_str, batched, target, overlap, hp.mu_law)
+def gen_from_file(model, mel, save_path, batched, target, overlap):
+    if isinstance(mel, list):
+        upsample = int(hp.sample_rate * hp.frame_shift_ms / 1000)
+        for i in range(0, len(mel), batch_size):
+            inputs = mel[i: min(i + batch_size, len(mel))]
+            input_lengths = [x.shape[0] for x in inputs]
+            max_length = max(input_lengths)
+            inputs = [_pad_2d(x, max_length, -4) for x in inputs]
+            inputs = torch.tensor(np.stack(inputs)).permute(0, 2, 1)
+            inputs = inputs.cuda() if use_cuda else inputs
+            samples = model.generate(
+                inputs, batched, target, overlap, hp.mu_law)
+            for bi in range(inputs.size(0)):
+                input_length = input_lengths[bi] * upsample
+                save_wav(samples[bi, : input_length],
+                         save_path[i + bi])
+    else:
+        mel = np.load(load_path).T
+        mel = torch.tensor(mel).unsqueeze(0)
+        mel = mel.cuda() if use_cuda else mel
+        samples = model.generate(
+            mel, batched, target, overlap, hp.mu_law)
+        save_wav(samples[0], save_path)
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description='Generate WaveRNN Samples')
-    parser.add_argument('--batched', '-b', dest='batched', action='store_true')
-    parser.add_argument('--unbatched', '-u', dest='batched', action='store_false')
-    parser.add_argument('--samples', '-s', type=int, help='[int] number of samples to generate')
-    parser.add_argument('--target', '-t', type=int, help='[int] number of samples in each batch index')
-    parser.add_argument('--overlap', '-o', type=int, help='[int] number of crossover samples')
-    parser.add_argument('--file', '-f', type=str, help='[string/path] for testing a wav outside dataset')
-    parser.add_argument('--weights', '-w', type=str, help='[string/path] checkpoint file to load weights from')
+    parser.add_argument('--mel', '-m', type=str, help='[string/path] for Mel file')
+    parser.add_argument('--list', '-l', type=str, help='[string/path] for Mel List')
+    parser.add_argument('--output', '-o', type=str, help='[string/path] for output')
+    parser.add_argument('--checkpoint', '-c', type=str, help='[string/path] checkpoint file')
 
     parser.set_defaults(batched=hp.batched)
     parser.set_defaults(samples=hp.gen_at_checkpoint)
     parser.set_defaults(target=hp.target)
     parser.set_defaults(overlap=hp.overlap)
-    parser.set_defaults(file=None)
-    parser.set_defaults(weights=None)
 
     args = parser.parse_args()
 
-    batched = args.batched
-    samples = args.samples
-    target = args.target
-    overlap = args.overlap
-    file = args.file
+    batched = hp.batched
+    samples = hp.gen_at_checkpoint
+    target = hp.target
+    overlap = hp.overlap
+    
+    mel = args.mel
+    output = args.output
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    if args.list is not None:
+        mel, output = [], []
+        with open(args.list) as fin:
+            fids = [line.strip() for line in fin.readlines()]
+        for fid in fids:
+            mel.append(np.load(os.path.join(args.mel, fid + '.npy')))
+            output.append(os.path.join(args.output, fid + '.wav'))
 
     print('\nInitialising Model...\n')
 
@@ -87,23 +85,13 @@ if __name__ == "__main__":
                   res_out_dims=hp.res_out_dims,
                   res_blocks=hp.res_blocks,
                   hop_length=hp.hop_length,
-                  sample_rate=hp.sample_rate).cuda()
+                  sample_rate=hp.sample_rate)
 
-    paths = Paths(hp.data_path, hp.model_id)
+    if use_cuda:
+        model = model.cuda()
 
-    restore_path = args.weights if args.weights else paths.latest_weights
-
-    model.restore(restore_path)
-
-    simple_table([('Generation Mode', 'Batched' if batched else 'Unbatched'),
-                  ('Target Samples', target if batched else 'N/A'),
-                  ('Overlap Samples', overlap if batched else 'N/A')])
-
-    _, test_set = get_datasets(paths.data)
-
-    if file :
-        gen_from_file(model, file, paths.output, batched, target, overlap)
-    else :
-        gen_testset(model, test_set, samples, batched, target, overlap, paths.output)
-
-    print('\n\nExiting...\n')
+    model.load_state_dict(checkpoint["state_dict"])
+    
+    gen_from_file(model, mel, output, batched, target, overlap)
+    
+    print('\nExiting...\n')

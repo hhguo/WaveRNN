@@ -111,8 +111,8 @@ class Model(nn.Module):
     def forward(self, x, mels) :
         self.step += 1
         bsize = x.size(0)
-        h1 = torch.zeros(1, bsize, self.rnn_dims).cuda()
-        h2 = torch.zeros(1, bsize, self.rnn_dims).cuda()
+        h1 = x.new_zeros(1, bsize, self.rnn_dims)
+        h2 = x.new_zeros(1, bsize, self.rnn_dims)
         mels, aux = self.upsample(mels)
 
         aux_idx = [self.aux_dims * i for i in range(5)]
@@ -139,7 +139,7 @@ class Model(nn.Module):
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
-    def generate(self, mels, save_path, batched, target, overlap, mu_law):
+    def generate(self, mels, batched, target, overlap, mu_law):
 
         self.eval()
         output = []
@@ -148,8 +148,6 @@ class Model(nn.Module):
         rnn2 = self.get_gru_cell(self.rnn2)
 
         with torch.no_grad():
-
-            mels = mels.cuda()
             mels = self.pad_tensor(mels.transpose(1, 2), pad=self.pad, side='both')
             mels, aux = self.upsample(mels.transpose(1, 2))
 
@@ -159,9 +157,9 @@ class Model(nn.Module):
 
             b_size, seq_len, _ = mels.size()
 
-            h1 = torch.zeros(b_size, self.rnn_dims).cuda()
-            h2 = torch.zeros(b_size, self.rnn_dims).cuda()
-            x = torch.zeros(b_size, 1).cuda()
+            h1 = mels.new_zeros(b_size, self.rnn_dims)
+            h2 = mels.new_zeros(b_size, self.rnn_dims)
+            x = mels.new_zeros(b_size, 1)
 
             d = self.aux_dims
             aux_split = [aux[:, :, d * i:d * (i + 1)] for i in range(4)]
@@ -204,13 +202,9 @@ class Model(nn.Module):
 
         if batched:
             output = self.xfade_and_unfold(output, target, overlap)
-        else:
-            output = output[0]
 
         if mu_law :
             output = decode_mu_law(output, self.n_classes, False)
-
-        save_wav(output, save_path)
 
         self.train()
 
@@ -235,7 +229,7 @@ class Model(nn.Module):
         # i.e., it won't generalise to other shapes/dims
         b, t, c = x.size()
         total = t + 2 * pad if side == 'both' else t + pad
-        padded = torch.zeros(b, total, c).cuda()
+        padded = x.new_zeros(b, total, c)
         if side == 'before' or side == 'both':
             padded[:, pad:pad + t, :] = x
         elif side == 'after':
@@ -281,7 +275,7 @@ class Model(nn.Module):
             padding = target + 2 * overlap - remaining
             x = self.pad_tensor(x, padding, side='after')
 
-        folded = torch.zeros(num_folds, target + 2 * overlap, features).cuda()
+        folded = x.new_zeros(num_folds, target + 2 * overlap, features)
 
         # Get the values for the folded tensor
         for i in range(num_folds):
@@ -355,30 +349,6 @@ class Model(nn.Module):
 
         return unfolded
 
-    def get_step(self) :
-        return self.step.data.item()
-
-    def checkpoint(self, path) :
-        k_steps = self.get_step() // 1000
-        self.save(f'{path}/checkpoint_{k_steps}k_steps.pyt')
-
-    def log(self, path, msg) :
-        with open(path, 'a') as f:
-            print(msg, file=f)
-
-    def restore(self, path):
-        if not os.path.exists(path) :
-            print('\nNew Training Session...\n')
-            self.save(path)
-        else:
-            print(f'\nLoading Model: "{path}"\n')
-            self.load(path)
-
-    def load(self, path) :
-        self.load_state_dict(torch.load(path), strict=False)
-
-    def save(self, path) :
-        torch.save(self.state_dict(), path)
 
     def num_params(self, print_out=True):
         parameters = filter(lambda p: p.requires_grad, self.parameters())

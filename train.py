@@ -50,6 +50,18 @@ use_cuda = torch.cuda.is_available()
 cudnn.benchmark = False if use_cuda else True
 
 
+def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
+  checkpoint_path = os.path.join(
+      checkpoint_dir, "checkpoint_step{}.pth".format(step))
+  torch.save({
+      "state_dict": model.state_dict(),
+      "optimizer": optimizer.state_dict(),
+      "global_step": step,
+      "global_epoch": epoch,
+  }, checkpoint_path)
+  print("Saved checkpoint:", checkpoint_path)
+
+
 class _NPYDataSource(FileDataSource):
   def __init__(self, name, list_file, use_zip=False):
     self._name = name
@@ -105,7 +117,7 @@ class PyTorchDataset(object):
 
 def collate_fn(batch):
     mel_win = hp.seq_len // hp.hop_length + 2 * hp.pad
-    max_offsets = [x[0].shape[-1] - (mel_win + 2 * hp.pad) for x in batch]
+    max_offsets = [x[0].shape[0] - (mel_win + 2 * hp.pad) for x in batch]
     mel_offsets = [np.random.randint(0, offset) for offset in max_offsets]
     sig_offsets = [(offset + hp.pad) * hp.hop_length for offset in mel_offsets]
     
@@ -146,7 +158,7 @@ def train(model, optimizer, data_loader, global_epoch, global_step,
       param_group['lr'] = init_lr
   
   while global_epoch < nepochs:
-    running_loss = np.array([0., 0., 0.])
+    running_loss = 0.
     for step, (x, y, m) in tqdm(enumerate(data_loader)):
       
       optimizer.zero_grad()
@@ -175,14 +187,14 @@ def train(model, optimizer, data_loader, global_epoch, global_step,
       optimizer.step()
 
       # Logs
-      print("loss: {}".format(float(loss)), end='\r')
+      log("loss: {}".format(float(loss)), end='\r')
       writer.add_scalar("loss", float(loss), global_step)
       writer.add_scalar("gradient norm", grad_norm, global_step)
       global_step += 1
 
     averaged_loss = running_loss / (len(data_loader))
     log("loss ({} epoch): {}".format(global_epoch, averaged_loss))
-    writer.add_scalar("epoch_loss", averaged_loss[0], global_epoch)
+    writer.add_scalar("epoch_loss", averaged_loss, global_epoch)
     global_epoch += 1
 
 
