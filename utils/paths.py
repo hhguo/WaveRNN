@@ -4,13 +4,13 @@ import os
 class Paths :
     def __init__(self, data_path, model_id) :
         self.data = data_path
-        self.quant = f'{data_path}/quant/'
-        self.mel = f'{data_path}/mel/'
-        self.checkpoints = f'checkpoints/{model_id}/'
-        self.latest_weights = f'{self.checkpoints}latest_weights.pyt'
-        self.output = f'model_outputs/{model_id}/'
-        self.step = f'{self.checkpoints}/step.npy'
-        self.log = f'{self.checkpoints}log.txt'
+        self.quant = '{}/quant/'.format(data_path)
+        self.mel = '{}/mel/'.format(data_path)
+        self.checkpoints = 'checkpoints/{}/'.format(model_id)
+        self.latest_weights = '{}latest_weights.pyt'.format(self.checkpoints)
+        self.output = 'model_outputs/{}/'.format(model_id)
+        self.step = '{}/step.npy'.format(self.checkpoints)
+        self.log = '{}log.txt'.format(self.checkpoints)
         self.create_paths()
 
     def create_paths(self) :

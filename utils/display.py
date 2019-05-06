@@ -13,7 +13,7 @@ def progbar(i, n, size=16):
 
 
 def stream(message) :
-    sys.stdout.write(f"\r{message}")
+    sys.stdout.write("\r{}".format(message))
 
 
 def simple_table(item_tuples) :
@@ -47,8 +47,8 @@ def simple_table(item_tuples) :
 
     for i in range(len(item_tuples)) :
 
-        temp_head = f'| {headings[i]} '
-        temp_body = f'| {cells[i]} '
+        temp_head = '| {} '.format(headings[i])
+        temp_body = '| {} '.format(cells[i])
 
         border += border_pattern[:len(temp_head)]
         head += temp_head
@@ -74,9 +74,9 @@ def time_since(started) :
     if m >= 60 :
         h = int(m // 60)
         m = m % 60
-        return f'{h}h {m}m {s}s'
+        return '{}h {}m {}s'.format(h, m, s)
     else :
-        return f'{m}m {s}s'
+        return '{}m {}s'.format(m, s)
 
 
 def plot(array) : 

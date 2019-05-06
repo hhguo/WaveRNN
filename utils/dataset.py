@@ -6,7 +6,7 @@ import hparams as hp
 
 def get_datasets(path, batch_size=16) :
 
-    with open(f'{path}dataset_ids.pkl', 'rb') as f:
+    with open('{}dataset_ids.pkl'.format(path), 'rb') as f:
         dataset_ids = pickle.load(f)
 
     test_ids = dataset_ids[-hp.test_samples:]
@@ -38,8 +38,8 @@ class AudiobookDataset(Dataset):
 
     def __getitem__(self, index):
         file = self.metadata[index]
-        m = np.load(f'{self.path}mel/{file}.npy')
-        x = np.load(f'{self.path}quant/{file}.npy')
+        m = np.load('{}mel/{}.npy'.format(self.path, file))
+        x = np.load('{}quant/{}.npy'.format(self.path, file))
         return m, x
 
     def __len__(self):
