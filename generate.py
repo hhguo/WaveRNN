@@ -35,7 +35,7 @@ def gen_from_file(model, mel, save_path, batched, target, overlap):
                 save_wav(samples[bi, : input_length],
                          save_path[i + bi])
     else:
-        mel = np.load(load_path).T
+        mel = np.load(mel).T
         mel = torch.tensor(mel).unsqueeze(0)
         mel = mel.cuda() if use_cuda else mel
         samples = model.generate(

@@ -17,6 +17,7 @@ hparams=tf.contrib.training.HParams(
   mu_law=True,
 
   # Model
+  mode = 'RAW', # RAW or MOL
   upsample_factors=(4, 5, 10),
   rnn_dims=512,
   fc_dims=512,
@@ -46,8 +47,8 @@ hparams=tf.contrib.training.HParams(
   
   # Generate
   batched=False,                 # very fast (realtime+) single utterance batched generation
-  target=16000,                 # target number of samples to be generated in each batch entry
-  overlap=8000,                  # number of samples for crossfading between batches
+  target=8000,                 # target number of samples to be generated in each batch entry
+  overlap=400,                  # number of samples for crossfading between batches
 )
 
 def hparams_debug_string():

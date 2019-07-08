@@ -88,8 +88,15 @@ class UpsampleNetwork(nn.Module):
 class Model(nn.Module):
     def __init__(self, rnn_dims, fc_dims, bits, pad, upsample_factors,
                  feat_dims, compute_dims, res_out_dims, res_blocks,
-                 hop_length, sample_rate):
+                 hop_length, sample_rate, mode='RAW'):
         super().__init__()
+        self.mode = mode
+        if self.mode == 'RAW' :
+            self.n_classes = 2 ** bits
+        elif self.mode == 'MOL' :
+            self.n_classes = 30
+        else :
+            RuntimeError("Unknown model mode value - ", self.mode)
         self.pad = pad
         self.n_classes = 2 ** bits
         self.rnn_dims = rnn_dims
@@ -141,6 +148,8 @@ class Model(nn.Module):
 
     def generate(self, mels, batched, target, overlap, mu_law):
 
+        mu_law = mu_law if self.mode == 'RAW' else False
+        
         self.eval()
         output = []
         start = time.time()
@@ -149,11 +158,12 @@ class Model(nn.Module):
 
         with torch.no_grad():
             mels = self.pad_tensor(mels.transpose(1, 2), pad=self.pad, side='both')
+            wave_len = (mels.size(1) - 1) * self.hop_length
             mels, aux = self.upsample(mels.transpose(1, 2))
 
             if batched:
-                mels = self.fold_with_overlap(mels, target, overlap)
-                aux = self.fold_with_overlap(aux, target, overlap)
+                mels, num_folders = self.fold_with_overlap(mels, target, overlap)
+                aux, _ = self.fold_with_overlap(aux, target, overlap)
 
             b_size, seq_len, _ = mels.size()
 
@@ -187,12 +197,17 @@ class Model(nn.Module):
                 x = F.relu(self.fc2(x))
 
                 logits = self.fc3(x)
-                posterior = F.softmax(logits, dim=1)
-                distrib = torch.distributions.Categorical(posterior)
-
-                sample = 2 * distrib.sample().float() / (self.n_classes - 1.) - 1.
-                output.append(sample)
-                x = sample.unsqueeze(-1)
+                if self.mode == 'MOL':
+                    sample = sample_from_discretized_mix_logistic(logits.unsqueeze(0).transpose(1, 2))
+                    output.append(sample.view(-1))
+                    x = sample.transpose(0, 1)
+                elif self.mode == 'RAW':
+                    posterior = F.softmax(logits, dim=1)
+                    distrib = torch.distributions.Categorical(posterior)
+                    sample = 2 * distrib.sample().float() / \
+                             (self.n_classes - 1.) - 1.
+                    output.append(sample)
+                    x = sample.unsqueeze(-1)
 
                 if i % 100 == 0 : self.gen_display(i, seq_len, b_size, start)
 
@@ -201,13 +216,22 @@ class Model(nn.Module):
         output = output.astype(np.float64)
 
         if batched:
-            output = self.xfade_and_unfold(output, target, overlap)
+            batches = []
+            for i in range(output.shape[0] // num_folders):
+                batches.append(self.xfade_and_unfold(
+                    output[i * num_folders: (i + 1) * num_folders],
+                    target, overlap))
+            output = np.stack(batches)
 
         if mu_law :
             output = decode_mu_law(output, self.n_classes, False)
 
+        # Fade-out at the end to avoid signal cutting out suddenly
+        fade_out = np.linspace(1, 0, 20 * self.hop_length)
+        output = output[:, : wave_len]
+        output[:, -20 * self.hop_length: ] *= fade_out
+        
         self.train()
-
         return output
 
     def gen_display(self, i, seq_len, b_size, start):
@@ -284,7 +308,7 @@ class Model(nn.Module):
             end = start + target + 2 * overlap
             folded[i] = x[:, start:end, :]
 
-        return folded
+        return folded, num_folds
 
     def xfade_and_unfold(self, y, target, overlap):
 
