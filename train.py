@@ -42,6 +42,7 @@ from tqdm import tqdm, trange
 from hparams import hparams, hparams_debug_string
 from hparams import hparams as hp
 from models.fatchord_wavernn import *
+from utils.distribution import *
 from utils.infolog import *
 
 
@@ -166,13 +167,18 @@ def train(model, optimizer, data_loader, global_epoch, global_step,
       # Feed data
       x, y, m = Variable(x), Variable(y), Variable(m)
       if use_cuda:
-          x, y, m = x.cuda(), y.cuda(), m.cuda()
+        x, y, m = x.cuda(), y.cuda(), m.cuda()
      
       outputs = model(x, m.transpose(1, 2))
+      
       y = y.unsqueeze(-1)
-      outputs = outputs.transpose(1, 2).unsqueeze(-1)
-
-      loss = F.cross_entropy(outputs, y)
+      
+      if model.mode == 'MOL':
+        y = y.float()
+        loss = discretized_mix_logistic_loss(outputs, y)
+      else:
+        outputs = outputs.transpose(1, 2).unsqueeze(-1)
+        loss = F.cross_entropy(outputs, y)
       running_loss += loss.item()
 
       # save checkpoint

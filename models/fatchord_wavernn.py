@@ -98,7 +98,6 @@ class Model(nn.Module):
         else :
             RuntimeError("Unknown model mode value - ", self.mode)
         self.pad = pad
-        self.n_classes = 2 ** bits
         self.rnn_dims = rnn_dims
         self.aux_dims = res_out_dims // 4
         self.hop_length = hop_length
