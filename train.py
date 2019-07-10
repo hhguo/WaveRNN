@@ -237,7 +237,8 @@ if __name__ == "__main__":
                 res_out_dims=hp.res_out_dims,
                 res_blocks=hp.res_blocks,
                 hop_length=hp.hop_length,
-                sample_rate=hp.sample_rate).cuda()
+                sample_rate=hp.sample_rate,
+                mode=hp.mode).cuda()
 
   optimizer = optim.Adam(model.parameters(),
     lr=hp.lr, betas=(hp.adam_beta1, hp.adam_beta2),

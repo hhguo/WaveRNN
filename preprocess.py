@@ -12,10 +12,13 @@ from hparams import hparams as hp
 
 def convert_file(path):
   y = load_wav(path)
-  mel = melspectrogram(y)
-  quant = encode_mu_law(y, mu=2 ** hp.bits) if hp.mu_law else \
+  mel = melspectrogram(y).T
+  if hp.mode == 'RAW':
+      quant = encode_mu_law(y, mu=2 ** hp.bits) if hp.mu_law else \
           float_2_label(y, bits=hp.bits)
-  return mel.astype(np.float32), quant.astype(np.int16)
+  elif hp.voc_mode == 'MOL' :
+      quant = float_2_label(y, bits=16)
+  return mel.astype(np.float32), quant.astype(np.int64)
 
 
 def _process_utterance(path, mel_dir, quant_dir):

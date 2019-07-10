@@ -9,7 +9,7 @@ from hparams import hparams as hp
 
 
 use_cuda = torch.cuda.is_available()
-batch_size = 8
+batch_size = 4
 
 
 def _pad_2d(x, max_len, constant_values=0):
