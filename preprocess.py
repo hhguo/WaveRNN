@@ -16,7 +16,7 @@ def convert_file(path):
   if hp.mode == 'RAW':
       quant = encode_mu_law(y, mu=2 ** hp.bits) if hp.mu_law else \
           float_2_label(y, bits=hp.bits)
-  elif hp.voc_mode == 'MOL' :
+  elif hp.mode == 'MOL' :
       quant = float_2_label(y, bits=16)
   return mel.astype(np.float32), quant.astype(np.int64)
 
