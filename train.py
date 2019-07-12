@@ -61,6 +61,8 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
       "global_epoch": epoch,
   }, checkpoint_path)
   print("Saved checkpoint:", checkpoint_path)
+  os.system("echo 'checkpoint_step{}.pth' > {}".format(
+      step, os.path.join(checkpoint_dir, 'checkpoints')))
 
 
 class _NPYDataSource(FileDataSource):
@@ -252,6 +254,13 @@ if __name__ == "__main__":
 
   # Load checkpoint
   global_epoch, global_step = 0, 0
+
+  if not checkpoint_path:
+    if os.path.exists(os.path.join(checkpoint_dir, 'checkpoints')):
+      with open(os.path.join(checkpoint_dir, 'checkpoints')) as fin:
+        ckpt = fin.readline().strip()
+      checkpoint_path = os.path.join(checkpoint_dir, ckpt)
+  
   if checkpoint_path:
     print("Load checkpoint from: {}".format(checkpoint_path))
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
