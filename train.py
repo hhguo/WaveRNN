@@ -136,9 +136,14 @@ def collate_fn(batch):
     mels = torch.FloatTensor(mels)
     labels = torch.LongTensor(labels)
 
-    x = label_2_float(labels[:, : hp.seq_len].float(), hp.bits)
-
+    x = labels[:, : hp.seq_len]
     y = labels[:, 1: ]
+
+    bits = 16 if hp.mode == 'MOL' else hp.bits
+
+    x = label_2_float(x.float(), bits)
+    if hp.mode == 'MOL':
+        y = label_2_float(y.float(), bits)
 
     return x, y, mels
 
@@ -175,7 +180,7 @@ def train(model, optimizer, data_loader, global_epoch, global_step,
       
       y = y.unsqueeze(-1)
       
-      if model.mode == 'MOL':
+      if hp.mode == 'MOL':
         y = y.float()
         loss = discretized_mix_logistic_loss(outputs, y)
       else:
@@ -246,11 +251,12 @@ if __name__ == "__main__":
                 res_blocks=hp.res_blocks,
                 hop_length=hp.hop_length,
                 sample_rate=hp.sample_rate,
-                mode=hp.mode).cuda()
+                mode=hp.mode)
 
-  optimizer = optim.Adam(model.parameters(),
-    lr=hp.lr, betas=(hp.adam_beta1, hp.adam_beta2),
-    weight_decay=hp.weight_decay)
+  if use_cuda:
+    model = model.cuda()
+
+  optimizer = optim.Adam(model.parameters(), lr=hp.lr)
 
   # Load checkpoint
   global_epoch, global_step = 0, 0

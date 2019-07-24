@@ -17,7 +17,7 @@ hparams=tf.contrib.training.HParams(
   mu_law=True,
 
   # Model
-  mode = 'RAW', # RAW or MOL
+  mode = 'MOL', # RAW or MOL
   upsample_factors=(4, 5, 10),
   rnn_dims=512,
   fc_dims=512,

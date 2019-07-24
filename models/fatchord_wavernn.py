@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.display import *
-from utils.audio import *
 import os
+
+from utils.audio import *
+from utils.display import *
+from utils.distribution import *
 
 
 class ResBlock(nn.Module):

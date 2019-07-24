@@ -62,16 +62,18 @@ if __name__ == "__main__":
     target = hp.target
     overlap = hp.overlap
     
-    mel = args.mel
-    output = args.output
+    input_path = args.mel
+    output_path = os.path.join(input_path, args.output[1:]) \
+        if args.output[: 1] == '*' else args.output
+    os.makedirs(output_path, exist_ok=True)
     checkpoint = torch.load(args.checkpoint, map_location='cpu')
     if args.list is not None:
         mel, output = [], []
         with open(args.list) as fin:
             fids = [line.strip() for line in fin.readlines()]
         for fid in fids:
-            mel.append(np.load(os.path.join(args.mel, fid + '.npy')))
-            output.append(os.path.join(args.output, fid + '.wav'))
+            mel.append(np.load(os.path.join(input_path, fid + '.npy')))
+            output.append(os.path.join(output_path, fid + '.wav'))
 
     print('\nInitialising Model...\n')
 
@@ -85,13 +87,15 @@ if __name__ == "__main__":
                   res_out_dims=hp.res_out_dims,
                   res_blocks=hp.res_blocks,
                   hop_length=hp.hop_length,
-                  sample_rate=hp.sample_rate)
+                  sample_rate=hp.sample_rate,
+                  mode=hp.mode)
 
     if use_cuda:
         model = model.cuda()
 
     model.load_state_dict(checkpoint["state_dict"])
-    
-    gen_from_file(model, mel, output, batched, target, overlap)
+   
+    with torch.no_grad():
+        gen_from_file(model, mel, output, batched, target, overlap)
     
     print('\nExiting...\n')

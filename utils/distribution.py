@@ -26,9 +26,10 @@ def discretized_mix_logistic_loss(y_hat, y, num_classes=65536,
     y_hat = y_hat.transpose(1, 2)
 
     # unpack parameters. (B, T, num_mixtures) x 3
-    logit_probs = y_hat[:, :, :nr_mix]
-    means = y_hat[:, :, nr_mix:2 * nr_mix]
-    log_scales = torch.clamp(y_hat[:, :, 2 * nr_mix:3 * nr_mix], min=log_scale_min)
+    logit_probs = y_hat[:, :, : nr_mix]
+    means = y_hat[:, :, nr_mix: 2 * nr_mix]
+    log_scales = torch.clamp(
+        y_hat[:, :, 2 * nr_mix: 3 * nr_mix], min=log_scale_min)
 
     # B x T x 1 -> B x T x num_mixtures
     y = y.expand_as(means)
@@ -56,14 +57,6 @@ def discretized_mix_logistic_loss(y_hat, y, num_classes=65536,
     # (not actually used in our code)
     log_pdf_mid = mid_in - log_scales - 2. * F.softplus(mid_in)
 
-    # tf equivalent
-    """
-    log_probs = tf.where(x < -0.999, log_cdf_plus,
-                         tf.where(x > 0.999, log_one_minus_cdf_min,
-                                  tf.where(cdf_delta > 1e-5,
-                                           tf.log(tf.maximum(cdf_delta, 1e-12)),
-                                           log_pdf_mid - np.log(127.5))))
-    """
     # TODO: cdf_delta <= 1e-5 actually can happen. How can we choose the value
     # for num_classes=65536 case? 1e-7? not sure..
     inner_inner_cond = (cdf_delta > 1e-5).float()
