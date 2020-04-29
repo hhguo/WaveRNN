@@ -98,4 +98,4 @@ def plot_spec(M) :
     plt.figure(figsize=(18,4))
     plt.imshow(M, interpolation='nearest', aspect='auto')
     plt.show()
-
+    
