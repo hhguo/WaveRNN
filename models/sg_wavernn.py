@@ -1,3 +1,5 @@
+from torch.nn.utils import weight_norm as wn
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,6 +8,14 @@ import os
 from utils.audio import *
 from utils.display import *
 from utils.distribution import *
+
+
+def wn_rnn(layer):
+    layer = wn(layer, name='weight_ih_l0')
+    layer = wn(layer, name='weight_hh_l0')
+    layer = wn(layer, name='bias_ih_l0')
+    layer = wn(layer, name='bias_hh_l0')
+    return layer
 
 
 class ResBlock(nn.Module):
@@ -30,19 +40,39 @@ class MelResNet(nn.Module):
     def __init__(self, res_blocks, in_dims, compute_dims, res_out_dims, pad):
         super().__init__()
         k_size = pad * 2 + 1
-        self.conv_in = nn.Conv1d(in_dims, compute_dims, kernel_size=k_size, bias=False)
-        self.batch_norm = nn.BatchNorm1d(compute_dims)
+        self.conv_in = wn(nn.Conv1d(in_dims, compute_dims, kernel_size=k_size, bias=False))
         self.layers = nn.ModuleList()
         for i in range(res_blocks):
             self.layers.append(ResBlock(compute_dims))
-        self.conv_out = nn.Conv1d(compute_dims, res_out_dims, kernel_size=1)
+        self.conv_out = wn(nn.Conv1d(compute_dims, res_out_dims, kernel_size=1))
 
     def forward(self, x):
         x = self.conv_in(x)
-        x = self.batch_norm(x)
         x = F.relu(x)
         for f in self.layers: x = f(x)
         x = self.conv_out(x)
+        return x
+
+
+
+class MelEncoder(nn.Module):
+    def __init__(self, in_dims, out_dims, pad):
+        super().__init__()
+        k_size_half = pad // 2 * 2 + 1
+        self.conv1 = wn(nn.Conv1d(in_dims, out_dims, kernel_size=k_size_half))
+        self.conv2 = wn(nn.Conv1d(out_dims, out_dims, kernel_size=k_size_half))
+        self.conv3 = wn(nn.Conv1d(out_dims, out_dims, kernel_size=1))
+        self.conv4 = wn(nn.Conv1d(out_dims, out_dims, kernel_size=1))
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.tanh(x)
+        x = self.conv2(x)
+        x = F.tanh(x)
+        x = self.conv3(x)
+        x = F.tanh(x)
+        x = self.conv4(x)
+        x = F.tanh(x)
         return x
 
 
@@ -60,93 +90,60 @@ class Stretch2d(nn.Module):
 
 
 class UpsampleNetwork(nn.Module):
-    def __init__(self, feat_dims, upsample_scales, compute_dims,
-                 res_blocks, res_out_dims, pad):
+    def __init__(self, feat_dims, res_out_dims, upsample_scales, pad):
         super().__init__()
         total_scale = np.cumproduct(upsample_scales)[-1]
         self.indent = pad * total_scale
-        self.resnet = MelResNet(res_blocks, feat_dims, compute_dims, res_out_dims, pad)
-        self.resnet_stretch = Stretch2d(total_scale, 1)
-        self.up_layers = nn.ModuleList()
-        for scale in upsample_scales:
-            k_size = (1, scale * 2 + 1)
-            padding = (0, scale)
-            stretch = Stretch2d(scale, 1)
-            conv = nn.Conv2d(1, 1, kernel_size=k_size, padding=padding, bias=False)
-            conv.weight.data.fill_(1. / k_size[1])
-            self.up_layers.append(stretch)
-            self.up_layers.append(conv)
+        self.encoder = MelEncoder(feat_dims, res_out_dims, pad)
+        self.upsample = Stretch2d(total_scale, 1)
+        #self.up_layers = nn.ModuleList()
+        #for scale in upsample_scales:
+        #    k_size = (1, scale * 2 + 1)
+        #    padding = (0, scale)
+        #    stretch = Stretch2d(scale, 1)
+        #    conv = wn(nn.Conv2d(1, 1, kernel_size=k_size, padding=padding, bias=False))
+        #    conv.weight.data.fill_(1. / k_size[1])
+        #    self.up_layers.append(stretch)
+        #    self.up_layers.append(conv)
 
-    def forward(self, m):
-        aux = self.resnet(m).unsqueeze(1)
-        aux = self.resnet_stretch(aux)
-        aux = aux.squeeze(1)
-        m = m.unsqueeze(1)
-        for f in self.up_layers: m = f(m)
-        m = m.squeeze(1)[:, :, self.indent:-self.indent]
-        return m.transpose(1, 2), aux.transpose(1, 2)
+    def forward(self, inputs):
+        conds = self.encoder(inputs).unsqueeze(1)
+        conds = self.upsample(conds).squeeze(1)
+        #for f in self.up_layers: conds = f(conds)
+        #conds = conds.squeeze(1)[:, :, self.indent: -self.indent]
+        return conds.transpose(1, 2)
 
 
 class Model(nn.Module):
     def __init__(self, rnn_dims, fc_dims, bits, pad, upsample_factors,
                  feat_dims, compute_dims, res_out_dims, res_blocks,
-                 hop_length, sample_rate, mode='RAW'):
+                 hop_length, sample_rate, mode='SG'):
         super().__init__()
-        self.mode = mode
-        if self.mode == 'RAW' :
-            self.n_classes = 2 ** bits
-        elif self.mode == 'MOL' :
-            self.n_classes = 30
-        else :
-            RuntimeError("Unknown model mode value - ", self.mode)
         self.pad = pad
         self.rnn_dims = rnn_dims
-        self.aux_dims = res_out_dims // 4
+        self.aux_dims = res_out_dims
+        self.compute_dims = compute_dims
         self.hop_length = hop_length
         self.sample_rate = sample_rate
 
-        self.upsample = UpsampleNetwork(feat_dims, upsample_factors, compute_dims, res_blocks, res_out_dims, pad)
-        self.I = nn.Linear(feat_dims + self.aux_dims + 1, rnn_dims)
-        self.rnn1 = nn.GRU(rnn_dims, rnn_dims, batch_first=True)
+        self.upsample = UpsampleNetwork(feat_dims, res_out_dims, upsample_factors, pad)
+        self.rnn1 = nn.GRU(1 + self.aux_dims, rnn_dims, batch_first=True)
         self.rnn2 = nn.GRU(rnn_dims + self.aux_dims, rnn_dims, batch_first=True)
-        self.fc1 = nn.Linear(rnn_dims + self.aux_dims, fc_dims)
-        self.fc2 = nn.Linear(fc_dims + self.aux_dims, fc_dims)
-        self.fc3 = nn.Linear(fc_dims, self.n_classes)
-
-        self.step = nn.Parameter(torch.zeros(1).long(), requires_grad=False)
+        self.output_layer = nn.Sequential(
+            wn(nn.Linear(rnn_dims, self.compute_dims)),
+            nn.Tanh(),
+            wn(nn.Linear(self.compute_dims, 2)))
         self.num_params()
 
     def forward(self, x, mels):
-        self.step += 1
-        bsize = x.size(0)
-        h1 = x.new_zeros(1, bsize, self.rnn_dims)
-        h2 = x.new_zeros(1, bsize, self.rnn_dims)
-        mels, aux = self.upsample(mels)
+        h1 = x.new_zeros(1, x.shape[0], self.rnn_dims)
+        h2 = x.new_zeros(1, x.shape[0], self.rnn_dims)
 
-        aux_idx = [self.aux_dims * i for i in range(5)]
-        a1 = aux[:, :, aux_idx[0]:aux_idx[1]]
-        a2 = aux[:, :, aux_idx[1]:aux_idx[2]]
-        a3 = aux[:, :, aux_idx[2]:aux_idx[3]]
-        a4 = aux[:, :, aux_idx[3]:aux_idx[4]]
-
-        x = torch.cat([x.unsqueeze(-1), mels, a1], dim=2)
-        x = self.I(x)
-        res = x
-        x, _ = self.rnn1(x, h1)
-
-        x = x + res
-        res = x
-        x = torch.cat([x, a2], dim=2)
-        x, _ = self.rnn2(x, h2)
-
-        x = x + res
-        x = torch.cat([x, a3], dim=2)
-        x = F.relu(self.fc1(x))
-
-        x = torch.cat([x, a4], dim=2)
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
-
+        mels = self.upsample(mels)
+        rnn1_outputs, _ = self.rnn1(torch.cat([x.unsqueeze(-1), mels], dim=-1), h1)
+        rnn2_outputs, _ = self.rnn2(torch.cat([rnn1_outputs, mels], dim=-1), h2)
+        return self.output_layer(rnn2_outputs)
+    '''
     def generate(self, mels, batched, target, overlap, mu_law):
 
         mu_law = mu_law if self.mode == 'RAW' else False
@@ -203,13 +200,10 @@ class Model(nn.Module):
                     output.append(sample.view(-1))
                     x = sample.transpose(0, 1)
                 elif self.mode == 'RAW':
-                    p = F.softmax(logits, dim=1)
-                    #p = torch.pow(p, 1.5)
-                    #p = p / (1e-18 + torch.sum(p, dim=-1))
-                    #p = torch.clamp(p - 0.002, min=0)
-                    #p = p / (1e-8 + torch.sum(p, dim=-1))
-                    dist = torch.distributions.Categorical(p)
-                    sample = 2 * dist.sample().float() / (self.n_classes - 1.) - 1.
+                    posterior = F.softmax(logits, dim=1)
+                    distrib = torch.distributions.Categorical(posterior)
+                    sample = 2 * distrib.sample().float() / \
+                             (self.n_classes - 1.) - 1.
                     output.append(sample)
                     x = sample.unsqueeze(-1)
 
@@ -227,7 +221,7 @@ class Model(nn.Module):
                     target, overlap))
             output = np.stack(batches)
 
-        if mu_law:
+        if mu_law :
             output = decode_mu_law(output, self.n_classes, False)
 
         # Fade-out at the end to avoid signal cutting out suddenly
@@ -237,7 +231,7 @@ class Model(nn.Module):
         
         self.train()
         return output
-
+    '''
     def gen_display(self, i, seq_len, b_size, start):
         gen_rate = int((i + 1) / (time.time() - start) * b_size / 1000)
         pbar = progbar(i, seq_len)

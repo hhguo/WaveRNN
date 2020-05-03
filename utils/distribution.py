@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -10,6 +11,33 @@ def log_sum_exp(x):
     m, _ = torch.max(x, dim=axis)
     m2, _ = torch.max(x, dim=axis, keepdim=True)
     return m + torch.log(torch.sum(torch.exp(x - m2), dim=axis))
+
+
+def power_loss(outputs, targets):
+    freq_outputs = torch.stft(outputs.squeeze(2), 600)
+    freq_targets = torch.stft(targets.squeeze(2), 600)
+    loss = F.mse_loss(freq_outputs, freq_targets)
+    return loss
+
+
+def single_gaussian_loss(prediction, target, log_scale_min=-14.):
+    means = prediction[:, :, : 1]
+    log_scales = torch.clamp(prediction[:, :, 1:], min=log_scale_min)
+
+    centered_y = target - means
+    var = torch.pow(torch.exp(log_scales), 2)
+    log_probs = -(torch.pow(centered_y, 2)) / (2 * var) - log_scales - math.log(math.sqrt(2 * math.pi))
+
+    return -torch.mean(log_probs)
+
+
+def sample_from_single_gaussian(dist, lower_temp=1.0, threshold=1e-5):
+    means = dist[:, :, : 1]
+    log_scales = dist[:, :, 1: ]
+    scales = torch.exp(log_scales) * lower_temp
+    normal = torch.distributions.normal.Normal(means, scales)
+    pred = normal.sample()
+    return pred
 
 
 # It is adapted from https://github.com/r9y9/wavenet_vocoder/blob/master/wavenet_vocoder/mixture.py

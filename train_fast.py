@@ -28,6 +28,7 @@ from utils.audio import *
 from utils.distribution import *
 from utils.infolog import *
 
+
 use_cuda = torch.cuda.is_available()
 cudnn.benchmark = False if use_cuda else True
 
@@ -59,50 +60,88 @@ class LRDecaySchedule(object):
         return lr
 
 
-class _NPYDataSource(FileDataSource):
-    def __init__(self, data_dir, file_list, ext='.npy'):
+class AcousticSliceDataSource(FileDataSource):
+    def __init__(self, data_dir_dict, file_list, ext='.npy'):
         self.storage = dict()
+        pad = hparams.pad
+        seq_frames = hparams.seq_len
+        hop_length = int(hparams.frame_shift_ms * hparams.sample_rate / 1000)
+        self.pad = pad
+        self.seq_frames = seq_frames
+        self.hop_length = hop_length
+
         with open(file_list) as fin:
-            self.data_ids = [line.strip() for line in fin.readlines()]
+            file_ids = [line.strip() for line in fin.readlines()]
+
+        log('Collect Mel spectrum dataset...')
+        mels = self.load_dataset(data_dir_dict['mel'], file_ids, '.npy')
+
+        log('Collect Waveform dataset...')
+        wavs = self.load_dataset(data_dir_dict['wav'], file_ids, '.npy')
+
+        log('Reshape Mel and Waveform...')
+        mel_block, wav_block = [], []
+        self.indices = []
+        total_frames = 0
+        for i in tqdm(range(len(file_ids))):
+            mel, wav = mels[i], wavs[i]
+            wav_length = int(min(mel.shape[0] * hop_length, wav.shape[0]))
+            mel, wav = mel[: wav_length // hop_length], wav[: wav_length]
+            nb_chunks = (mel.shape[0] -  2 * pad) // seq_frames
+            mel = mel[: nb_chunks * seq_frames + 2 * pad]
+            wav = wav[: mel.shape[0] * hop_length]
+            mel_block.append(mel)
+            wav_block.append(wav)
+            self.indices += range(total_frames, total_frames + mel.shape[0] - 2 * pad, seq_frames)
+            total_frames += mel.shape[0]
+        
+        log('Concatenate all chunks togethers...')
+        mel_block = self.concatenate(mel_block)
+        wav_block = self.concatenate(wav_block)
+        self.data_block = {'mel': mel_block, 'wav': wav_block}
+
+    def collect_files(self):
+        return self.indices
+
+    def collect_features(self, index):
+        mel = self.data_block['mel'][index: index + 2 * self.pad + self.seq_frames]
+        begin_sample = (index + self.pad) * self.hop_length - 1
+        end_sample = (index + self.pad + self.seq_frames) * self.hop_length
+        wav = self.data_block['wav'][begin_sample: end_sample]
+        return [mel, wav]
+
+    def load_dataset(self, data_dir, file_ids, ext='.npy'):
+        dataset = []
         if data_dir[-4: ] == '.zip':
             zfile = zipfile.ZipFile(data_dir)
             for filename in tqdm(list(zfile.namelist())):
                 data_id, data_ext = splitext(os.path.split(filename)[-1])
-                if data_ext == ext and data_id in self.data_ids:
+                if data_ext == ext and data_id in file_ids:
                     zip_data = zfile.open(filename, 'r')
                     raw_data = io.BytesIO(zip_data.read())
                     if ext == '.npy':
-                        self.storage[data_id] = np.load(raw_data)
+                        dataset.append(np.load(raw_data))
                     elif ext == '.wav':
-                        self.storage[data_id] = sf.read(raw_data)
+                        dataset.append(sf.read(raw_data))
         else:
-            for data_id in tqdm(self.data_ids):
+            for data_id in tqdm(file_ids):
                 if ext == '.npy':
-                    self.storage[data_id] = np.load(
-                        os.path.join(data_dir, data_id + ext))
+                    dataset.append(np.load(
+                        os.path.join(data_dir, data_id + ext)))
                 elif ext == '.wav':
-                    self.storage[data_id], _ = sf.read(
-                        os.path.join(data_dir, data_id + ext))
-
-    def collect_files(self):
-        return self.data_ids
-
-    def collect_features(self, data_id):
-        return self.storage[data_id]
-
-
-class AcousticDataSource(FileDataSource):
-    def __init__(self, data_dir_dict, file_list):
-        self.data = [
-            _NPYDataSource(data_dir_dict['mel'], file_list, '.npy'),
-            _NPYDataSource(data_dir_dict['wav'], file_list, '.npy')]
-
-    def collect_files(self):
-        return self.data[0].data_ids
-
-    def collect_features(self, data_id):
-        return [x.storage[data_id] for x in self.data]
-
+                    dataset.append(sf.read(
+                        os.path.join(data_dir, data_id + ext)))
+        return dataset
+    
+    def concatenate(self, data_list):
+        shape = list(data_list[0].shape)
+        shape[0] = sum([x.shape[0] for x in data_list])
+        data = np.zeros(shape, dtype=data_list[0].dtype)
+        index = 0
+        for x in tqdm(data_list):
+            data[index: index + x.shape[0]] = x
+            index += x.shape[0]
+        return data
 
 class PyTorchDataset(object):
     def __init__(self, X):
@@ -116,26 +155,15 @@ class PyTorchDataset(object):
 
 
 def collate_fn(batch):
-    hop_length = int(hparams.frame_shift_ms * hparams.sample_rate / 1000)
-    seq_length = hparams.seq_len * hop_length
-
-    mel_win = hparams.seq_len + 2 * hparams.pad
-    max_offsets = [x[0].shape[0] - (mel_win + 2 * hparams.pad) for x in batch]
-    mel_offsets = [np.random.randint(0, offset) for offset in max_offsets]
-    sig_offsets = [(offset + hparams.pad) * hop_length for offset in mel_offsets]
-
-    mels = [x[0][mel_offsets[i]: mel_offsets[i] + mel_win]\
-            for i, x in enumerate(batch)]
-
-    labels = [x[1][sig_offsets[i]: sig_offsets[i] + seq_length + 1]\
-              for i, x in enumerate(batch)]
+    mels = [x[0] for x in batch]
+    labels = [x[1] for x in batch]
 
     mels = torch.FloatTensor(np.stack(mels).astype(np.float32))
-    labels = torch.LongTensor(np.stack(labels).astype(np.int64))
+    labels = torch.LongTensor(np.stack(labels).astype(np.int32))
 
     bits = 16 if hparams.mode != 'RAW' else hparams.bits
-    x = label_2_float(labels[:, : seq_length].float(), bits)
-    y = labels[:, 1:]
+    x = label_2_float(labels[:, : -1].float(), bits)
+    y = labels[:, 1: ]
     if hparams.mode != 'RAW':
         y = label_2_float(y.float(), bits)
     return x, y, mels
@@ -198,13 +226,13 @@ def train(model, optimizer, data_loader, checkpoint_dir,
             optimizer.step()
 
             # Logs
-            log("loss: {}".format(float(loss)), end='\r')
+            log("loss: {:.3f}".format(float(loss)), end='\r')
             writer.add_scalar("loss", float(loss), global_step)
             writer.add_scalar("gradient norm", grad_norm, global_step)
             global_step += 1
 
         averaged_loss = running_loss / (len(data_loader))
-        log("loss ({} epoch): {}".format(global_epoch, averaged_loss))
+        log("loss ({} epoch): {:.3f}".format(global_epoch, averaged_loss))
         writer.add_scalar("epoch_loss", averaged_loss, global_epoch)
         global_epoch += 1
 
@@ -217,7 +245,7 @@ def main(input_dir, output_dir, file_list, checkpoint_dir,
     Model = get_model(hparams)
 
     # Input dataset definitions
-    X = FileSourceDataset(AcousticDataSource(
+    X = FileSourceDataset(AcousticSliceDataSource(
         {'mel': input_dir, 'wav': output_dir},
         file_list))
     dataset = PyTorchDataset(X)

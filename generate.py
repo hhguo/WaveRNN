@@ -3,13 +3,13 @@ import os
 import re
 import torch
 
-from models.fatchord_wavernn import Model
+from models import *
 from utils.audio import *
 from utils.display import simple_table
 from hparams import hparams
 
 use_cuda = torch.cuda.is_available()
-batch_size = 4
+batch_size = 1
 
 
 def _pad_2d(x, max_len, constant_values=0):
@@ -41,16 +41,25 @@ def gen_from_file(model, mel, save_path, batched, target, overlap):
                                      hparams.mu_law)
             for bi in range(inputs.size(0)):
                 input_length = input_lengths[bi] * upsample
-                save_wav(samples[bi, :input_length], save_path[i + bi])
+                output = samples[bi, :input_length]
+                #if hparams.preemphasis > 0:
+                #    output = inv_preemphasis(output)
+                save_wav(output, save_path[i + bi])
     else:
         mel = np.load(mel).T
         mel = torch.tensor(mel).unsqueeze(0)
         mel = mel.cuda() if use_cuda else mel
         samples = model.generate(mel, batched, target, overlap, hparams.mu_law)
-        save_wav(samples[0], save_path)
+        output = samples[0]
+        #if hparams.preemphasis > 0:
+        #    output = inv_preemphasis(output)
+        save_wav(output, save_path)
 
 
-def main(ckpt_path, input_path, output_path=None, list_path=None):
+def main(ckpt_path, input_path, output_path=None, list_path=None, config=''):
+    hparams.parse(config)
+    Model = get_model(hparams)
+
     batched = hparams.batched
     samples = hparams.gen_at_checkpoint
     target = hparams.target
@@ -76,7 +85,7 @@ def main(ckpt_path, input_path, output_path=None, list_path=None):
         output.append(os.path.join(output_path, fid + '.wav'))
 
     print('\nInitialising Model...\n')
-
+    hop_length = int(hparams.frame_shift_ms * hparams.sample_rate / 1000)
     model = Model(rnn_dims=hparams.rnn_dims,
                   fc_dims=hparams.fc_dims,
                   bits=hparams.bits,
@@ -86,7 +95,7 @@ def main(ckpt_path, input_path, output_path=None, list_path=None):
                   compute_dims=hparams.compute_dims,
                   res_out_dims=hparams.res_out_dims,
                   res_blocks=hparams.res_blocks,
-                  hop_length=hparams.hop_length,
+                  hop_length=hop_length,
                   sample_rate=hparams.sample_rate,
                   mode=hparams.mode)
 

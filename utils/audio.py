@@ -15,7 +15,7 @@ def load_wav(path):
 
 
 def save_wav(wav, path):
-    wav *= 32767 / max(0.01, np.max(np.abs(wav)))
+    wav *= 32767 / max(1., np.max(np.abs(wav)))
     scipy.io.wavfile.write(path, hparams.sample_rate, wav.astype(np.int16))
 
 
@@ -28,7 +28,7 @@ def inv_preemphasis(x):
 
 
 def spectrogram(y):
-    D = _stft(preemphasis(y))
+    D = _stft(y)
     S = _amp_to_db(np.abs(D)) - hparams.ref_level_db
     return _normalize(S)
 
@@ -37,27 +37,56 @@ def fast_inv_spectrogram(spectrogram):
     '''Converts spectrogram to waveform using librosa'''
     S = _db_to_amp(_denormalize(spectrogram) +
                    hparams.ref_level_db)  # Convert back to linear
-    return inv_preemphasis(_fast_griffin_lim(
-        S**hparams.power))  # Reconstruct phase
+    return _fast_griffin_lim(S**hparams.power)  # Reconstruct phase
 
 
 def inv_mel_spectrogram(mel_spectrogram):
     D = _denormalize(mel_spectrogram.T)
     S = _mel_to_linear(_db_to_amp(D + hparams.ref_level_db))
-    return inv_preemphasis(_griffin_lim(S**hparams.power))
+    return _griffin_lim(S**hparams.power)
 
 
 def inv_spectrogram(spectrogram):
     '''Converts spectrogram to waveform using librosa'''
     S = _db_to_amp(_denormalize(spectrogram) +
                    hparams.ref_level_db)  # Convert back to linear
-    return inv_preemphasis(_griffin_lim(S**hparams.power))  # Reconstruct phase
+    return _griffin_lim(S**hparams.power)  # Reconstruct phase
 
 
 def melspectrogram(y):
-    D = _stft(preemphasis(y))
+    D = _stft(y)
     S = _amp_to_db(_linear_to_mel(np.abs(D))) - hparams.ref_level_db
     return _normalize(S)
+    
+    
+def _fast_griffin_lim(S):
+    '''librosa implementation of Griffin-Lim
+    Based on https://github.com/librosa/librosa/issues/434
+    '''
+    alpha = 0.99
+    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
+    S_complex = np.abs(S).astype(np.complex)
+    t_0 = S_complex * angles
+    y = _istft(S_complex * angles)
+    for i in range(hparams.griffin_lim_iters):
+        angles = np.exp(1j * np.angle(_stft(y)))
+        t_1 = S_complex * angles
+        c = t_1 + alpha * (t_1 - t_0)
+        t_0 = t_1
+        y = _istft(c)
+    return y
+
+def _griffin_lim(S):
+    '''librosa implementation of Griffin-Lim
+Based on https://github.com/librosa/librosa/issues/434
+'''
+    angles = np.exp(2j * np.pi * np.random.rand(*S.shape))
+    S_complex = np.abs(S).astype(np.complex)
+    y = _istft(S_complex * angles)
+    for i in range(hparams.griffin_lim_iters):
+        angles = np.exp(1j * np.angle(_stft(y)))
+        y = _istft(S_complex * angles)
+    return y
 
 
 def _stft(y):
